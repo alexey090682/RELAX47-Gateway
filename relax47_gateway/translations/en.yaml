@@ -1,0 +1,40 @@
+configuration:
+  router_host:
+    name: Router address
+    description: Main Xiaomi AX6000 LAN address.
+  write_mode:
+    name: Write mode
+    description: Allows only audited, allowlisted write tools with automatic readback.
+  auto_verify_writes:
+    name: Verify every write
+    description: Reads the target after a change and rolls back an unverified DHCP update.
+  secure_mcp_enabled:
+    name: Secure MCP Tunnel
+    description: Outbound-only connection to an approved OpenAI tunnel.
+  public_mcp_enabled:
+    name: Public HTTPS MCP
+    description: Enables the OAuth-protected MCP endpoint on the configured internal port.
+  public_mcp_port:
+    name: Public MCP internal port
+    description: Router port 443 should forward to this TLS port.
+  public_base_url:
+    name: Public HTTPS origin
+    description: HTTPS origin without a trailing slash, for example https://home.example.org.
+  oauth_activation_code:
+    name: OAuth activation code
+    description: Owner-only code of at least 12 characters entered during ChatGPT authorization.
+  oauth_token_hours:
+    name: OAuth access token lifetime
+    description: Access token lifetime in hours; refresh tokens rotate separately.
+  public_rate_limit_per_minute:
+    name: Public MCP requests per minute
+    description: Per-client and source request limit for the public endpoint.
+  public_max_request_bytes:
+    name: Public MCP maximum request size
+    description: Rejects oversized request bodies before parsing.
+  public_session_hours:
+    name: Public MCP session lifetime
+    description: Maximum lifetime of an independent client session.
+  ssh_enabled:
+    name: LAN SSH
+    description: Optional key-only maintenance shell; not used by Secure MCP.

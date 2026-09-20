@@ -1,0 +1,90 @@
+name: "RELAX47 Local Gateway"
+version: "7.14.9"
+slug: "relax47_gateway"
+description: "Управляемый шлюз AX6000 и Home Assistant: локальный и публичный HTTPS MCP с OAuth"
+url: "https://github.com/alexey090682/RELAX47-Gateway"
+arch:
+  - amd64
+startup: services
+boot: auto
+init: false
+stage: experimental
+host_network: true
+ingress: true
+ingress_port: 8099
+panel_icon: "mdi:lan-connect"
+panel_title: "RELAX47 LAN"
+homeassistant_api: true
+hassio_api: true
+hassio_role: manager
+map:
+  - type: homeassistant_config
+    read_only: false
+    path: /homeassistant
+  - type: share
+    read_only: false
+    path: /share
+  - type: ssl
+    read_only: true
+options:
+  router_host: "192.168.31.1"
+  router_model: "RA72"
+  router_firmware: "1.0.122"
+  router_password: ""
+  lan_cidr: "192.168.31.0/24"
+  write_mode: true
+  confirmation_code: ""
+  allowed_service_domains: "homeassistant,light,switch,scene,script,automation,input_boolean,input_select"
+  auto_verify_writes: true
+  admin_all_service_domains: true
+  secure_mcp_enabled: true
+  tunnel_id: ""
+  tunnel_api_key: ""
+  public_mcp_enabled: true
+  public_mcp_port: 8766
+  public_base_url: "https://relax47-home.duckdns.org"
+  oauth_activation_code: ""
+  oauth_token_hours: 12
+  public_rate_limit_per_minute: 120
+  public_max_request_bytes: 2097152
+  public_session_hours: 12
+  ssh_enabled: false
+  ssh_port: 22222
+  ssh_authorized_keys: ""
+  reverse_ssh_enabled: false
+  reverse_ssh_host: ""
+  reverse_ssh_port: 22
+  reverse_ssh_user: ""
+  reverse_ssh_remote_port: 22222
+  reverse_ssh_private_key: ""
+schema:
+  router_host: str
+  router_model: str
+  router_firmware: str
+  router_password: password
+  lan_cidr: str
+  write_mode: bool
+  confirmation_code: password
+  allowed_service_domains: str
+  auto_verify_writes: bool
+  admin_all_service_domains: bool
+  secure_mcp_enabled: bool
+  tunnel_id: str
+  tunnel_api_key: password
+  public_mcp_enabled: bool
+  public_mcp_port: port
+  public_base_url: str
+  oauth_activation_code: password
+  oauth_token_hours: int(1,168)
+  public_rate_limit_per_minute: int(10,600)
+  public_max_request_bytes: int(65536,4194304)
+  public_session_hours: int(1,168)
+  ssh_enabled: bool
+  ssh_port: port
+  ssh_authorized_keys: str
+  reverse_ssh_enabled: bool
+  reverse_ssh_host: str
+  reverse_ssh_port: port
+  reverse_ssh_user: str
+  reverse_ssh_remote_port: port
+  reverse_ssh_private_key: password
