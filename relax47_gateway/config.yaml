@@ -1,5 +1,5 @@
 name: "RELAX47 Local Gateway"
-version: "7.14.13"
+version: "7.14.14"
 slug: "relax47_gateway"
 description: "Управляемый шлюз AX6000 и Home Assistant: локальный и публичный HTTPS MCP с OAuth"
 url: "https://github.com/alexey090682/RELAX47-Gateway"
@@ -88,4 +88,3 @@ schema:
   reverse_ssh_user: str
   reverse_ssh_remote_port: port
   reverse_ssh_private_key: password
-

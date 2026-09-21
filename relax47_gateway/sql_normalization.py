@@ -32,8 +32,8 @@ def _identity(value):
     return value if isinstance(value, str) and value.strip() == value and value else None
 
 
-def _index(rows):
-    ids = [_identity(r.get('id')) for r in rows if isinstance(r, dict)]
+def _index(rows, field='id'):
+    ids = [_identity(r.get(field)) for r in rows if isinstance(r, dict)]
     counts = Counter(x for x in ids if x is not None)
     return set(counts), sum(n - 1 for n in counts.values()), ids.count(None)
 
@@ -111,11 +111,31 @@ def normalization_plan(manager):
 
         def rows(store, field):
             value = documents[STORES[store]].get(field, [])
+            if store == 1 and field in ('vehicles', 'passes', 'requests') and isinstance(value, dict):
+                result = []
+                for key, item in value.items():
+                    if not isinstance(item, dict):
+                        findings['invalid_' + field + '_records'] += 1
+                        continue
+                    item = dict(item)
+                    # A map is a legacy container, not a business lookup table.
+                    # Vehicle/request keys are IDs; pass keys are plates, NOT IDs.
+                    identity_field = 'vehicle_id' if field == 'vehicles' else 'id'
+                    if field != 'passes':
+                        explicit = item.get(identity_field)
+                        if explicit is not None and explicit != key:
+                            findings[field + '_key_identity_mismatch'] += 1
+                        if explicit is None:
+                            item[identity_field] = key
+                    elif item.get('plate') not in (None, key):
+                        findings['passes_key_plate_mismatch'] += 1
+                    result.append(item)
+                return result
             if not isinstance(value, list):
                 findings['non_array_' + field] += 1
                 return []
             findings['invalid_' + field + '_records'] += sum(not isinstance(x, dict) for x in value)
-            return [x for x in value if isinstance(x, dict)]
+            return [dict(x) for x in value if isinstance(x, dict)]
 
         stays = rows(0, 'entries')
         stay_ids, duplicates, missing = _index(stays)
@@ -142,16 +162,23 @@ def normalization_plan(manager):
                 if not equal:
                     findings['current_stay_requires_reconciliation'] += 1
         vehicles = rows(1, 'vehicles')
-        vehicle_ids, duplicates, missing = _index(vehicles)
+        # Older list fixtures use id; live registry uses vehicle_id. Conflicting
+        # identities must be reviewed, never silently rebound.
+        for vehicle in vehicles:
+            if 'vehicle_id' not in vehicle:
+                vehicle['vehicle_id'] = vehicle.get('id')
+            elif vehicle.get('id') is not None and vehicle['vehicle_id'] != vehicle['id']:
+                findings['conflicting_vehicle_identity_fields'] += 1
+        vehicle_ids, duplicates, missing = _index(vehicles, 'vehicle_id')
         findings['duplicate_vehicle_ids'] += duplicates
         findings['missing_vehicle_ids'] += missing
         plates = Counter(v.get('plate') for v in vehicles if _identity(v.get('plate')))
-        findings['duplicate_exact_vehicle_plates'] += sum(n-1 for n in plates.values())
+        findings['vehicle_plate_identity_review'] += sum(n-1 for n in plates.values())
         passes = rows(1, 'passes')
         requests = rows(1, 'requests')
         pass_ids, duplicates, missing = _index(passes)
         findings['duplicate_pass_ids'] += duplicates
-        findings['missing_pass_ids'] += missing
+        findings['legacy_pass_ids_to_assign'] += missing
         request_ids, duplicates, missing = _index(requests)
         findings['duplicate_request_ids'] += duplicates
         findings['missing_request_ids'] += missing
@@ -166,6 +193,13 @@ def normalization_plan(manager):
                     if value is None or value == '':
                         if field in required:
                             findings[collection + '_missing_' + field] += 1
+                    elif field == 'stay_id' and value in ('administrative_passes', 'unknown'):
+                        # Non-guest history is legitimate. Preserve its category;
+                        # the target model needs nullable stay_id, not fake stays.
+                        findings[collection + '_non_guest_context'] += 1
+                    elif field == 'stay_id' and value == 'current':
+                        # Never attach an old event to today's current stay.
+                        findings[collection + '_historical_current_context_review'] += 1
                     elif _identity(value) not in ids:
                         findings[collection + '_unresolved_' + field] += 1
         target_counts = {name: conn.execute('SELECT count(*) FROM ' + name).fetchone()[0] for name in TARGETS}
@@ -176,7 +210,8 @@ def normalization_plan(manager):
                 'timezone': prop[0], 'inventory': inventory, 'target_counts': target_counts,
                 'findings': dict(sorted((k,v) for k,v in findings.items() if v)),
                 'current_stay': current_status,
-                'plan_sha256': hashlib.sha256(json.dumps([1, prop[0], fingerprints, target_counts], sort_keys=True).encode()).hexdigest(),
+                'plan_sha256': hashlib.sha256(json.dumps([2, prop[0], fingerprints, target_counts], sort_keys=True).encode()).hexdigest(),
+                'audit_version': 2,
                 'cutover_ready': False, 'normalized_business_rows_written': False,
                 'coverage': 'inventory_and_identity_checks_only',
                 'remaining_gates': ['domain_mapping', 'historical_reconciliation', 'shadow_parity', 'controlled_cutover'],

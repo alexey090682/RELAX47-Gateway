@@ -89,6 +89,18 @@ class Store:
             envelope['data'] = data
             # Serialize in the HA event loop before handing work to another thread.
             payload = json.dumps(envelope, ensure_ascii=False, allow_nan=False)
-            await self.hass.async_add_executor_job(self._save, payload)
+            # Cancelling an HA coroutine does not stop SQLite's executor thread.
+            # Keep the lock until its transaction finishes, otherwise a committed
+            # save can leave self.revision stale and break subsequent saves.
+            pending = asyncio.ensure_future(self.hass.async_add_executor_job(self._save, payload))
+            cancelled = False
+            while not pending.done():
+                try:
+                    await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    cancelled = True
+            pending.result()  # A failed transaction must not advance local state.
             self.revision += 1
             self.envelope = json.loads(payload)
+            if cancelled:
+                raise asyncio.CancelledError
