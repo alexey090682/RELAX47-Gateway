@@ -66,6 +66,15 @@ class SQLSafetyTests(unittest.TestCase):
         self.manager.install_upload(self.args,'test')
         self.assertEqual(self.value(),'new')
 
+    def test_upload_cannot_replace_active_ha_sql_backend(self):
+        database(self.manager.database_path)
+        with closing(sqlite3.connect(self.manager.database_path)) as conn, conn:
+            conn.execute("INSERT INTO relax47_meta VALUES('runtime_backend','sqlite_store_v1')")
+        with self.assertRaisesRegex(PermissionError, 'Active HA SQL'):
+            self.manager.install_upload(self.args, 'test')
+        self.assertEqual(self.value(), 'old')
+        self.assertEqual(self.calls, [])
+
     def test_failed_verification_rolls_back(self):
         database(self.manager.database_path)
         inspect = self.manager._inspect

@@ -82,6 +82,33 @@ class PublicMCPTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertIn("session", body["error"]["message"].lower())
 
+    def test_migration_and_retention_require_admin_for_list_and_call(self):
+        registration = self.mcp.register_client({"client_name": "restricted", "redirect_uris": ["https://client.example/callback"]})
+        token = self.mcp.issue_tokens(client_id=registration['client_id'], scopes=['mcp:read', 'mcp:write'])['access_token']
+        _, headers, _ = self.initialize(token, 'restricted')
+        headers = {'Authorization': 'Bearer '+token, 'Mcp-Session-Id': headers['Mcp-Session-Id'], 'Content-Type': 'application/json'}
+        _, _, body = self.request('/mcp', method='POST', headers=headers,
+            payload={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})
+        names = {t['name'] for t in body['result']['tools']}
+        protected = {'sql_prepare_runtime_migration', 'maintenance_backup_retention',
+                     'sql_runtime_migration_plan', 'sql_runtime_migration_status', 'sql_migrate_runtime'}
+        self.assertFalse(names & protected)
+        for name in protected:
+            _, _, body = self.request('/mcp', method='POST', headers=headers,
+                payload={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': name, 'arguments': {}}})
+            self.assertIn('error', body)
+            self.assertIn('mcp:admin', str(body))
+
+    def test_admin_catalog_includes_new_runtime_tools(self):
+        _, token = self.token('admin-catalog')
+        _, headers, _ = self.initialize(token, 'admin-catalog')
+        _, _, body = self.request('/mcp', method='POST',
+            headers={'Authorization': 'Bearer '+token, 'Mcp-Session-Id': headers['Mcp-Session-Id']},
+            payload={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
+        names = {t['name'] for t in body['result']['tools']}
+        self.assertTrue({'sql_prepare_runtime_migration', 'maintenance_backup_retention',
+                         'sql_runtime_migration_plan', 'sql_migrate_runtime'} <= names)
+
     def test_namespaced_tool_call_is_accepted(self):
         _, token = self.token("ChatGPT")
         _, headers, _ = self.initialize(token, "ChatGPT")

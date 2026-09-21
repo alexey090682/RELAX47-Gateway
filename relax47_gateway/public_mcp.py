@@ -83,6 +83,15 @@ def audit_connection(event: str, **fields: Any) -> None:
             handle.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+ADMIN_TOOLS = frozenset({
+    "terminal_exec", "supervisor_diagnostics", "maintenance_core_action",
+    "sql_database_status", "sql_inspect_upload", "sql_install_upload",
+    "sql_prepare_runtime_migration", "sql_runtime_migration_plan",
+    "sql_runtime_migration_status", "sql_migrate_runtime",
+    "maintenance_backup_cleanup", "maintenance_backup_retention",
+})
+
+
 def allow_request(key: str) -> bool:
     cutoff = now() - 60
     with RATE_LOCK:
@@ -329,7 +338,7 @@ def authenticate(header: str | None) -> dict[str, Any] | None:
 
 
 class PublicMCPHandler(BaseHTTPRequestHandler):
-    server_version = "RELAX47PublicMCP/7.14.11"
+    server_version = "RELAX47PublicMCP/7.14.12"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[public-mcp {self.log_date_time_string()}] {self.client_address[0]} {fmt % args}", flush=True)
@@ -591,7 +600,7 @@ class PublicMCPHandler(BaseHTTPRequestHandler):
         elif method == "tools/list":
             tools = gateway.mcp_tool_list()
             if "mcp:admin" not in scopes:
-                tools = [item for item in tools if item.get("name") not in {"terminal_exec", "supervisor_diagnostics", "maintenance_core_action", "sql_database_status", "sql_inspect_upload", "sql_install_upload", "maintenance_backup_cleanup"}]
+                tools = [item for item in tools if item.get("name") not in ADMIN_TOOLS]
             result = {"tools": tools}
         elif method == "tools/call":
             params = request.get("params") or {}
@@ -602,7 +611,7 @@ class PublicMCPHandler(BaseHTTPRequestHandler):
             name = raw_name.rsplit(".", 1)[-1]
             if name not in gateway.TOOLS:
                 raise KeyError(f"Unknown tool: {raw_name}")
-            if name in {"terminal_exec", "supervisor_diagnostics", "maintenance_core_action", "sql_database_status", "sql_inspect_upload", "sql_install_upload", "maintenance_backup_cleanup"} and "mcp:admin" not in scopes:
+            if name in ADMIN_TOOLS and "mcp:admin" not in scopes:
                 raise PermissionError("The token does not include mcp:admin")
             annotations = gateway.TOOLS[name][3]
             if not annotations.get("readOnlyHint", False) and "mcp:write" not in scopes:

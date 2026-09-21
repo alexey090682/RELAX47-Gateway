@@ -28,10 +28,11 @@ from localtuya_migration import LocalTuyaManager
 from maintenance import MaintenanceManager
 from sql_migration import Relax47SQLManager
 from runtime_migration import prepare_runtime
+from runtime_cutover import preflight, migrate_runtime, runtime_status
 from backup_retention import BackupRetention
 
 
-VERSION = "7.14.11"
+VERSION = "7.14.12"
 ROUTER_HOST = os.environ.get("RELAX47_ROUTER_HOST", "192.168.31.1")
 ROUTER_MODEL = os.environ.get("RELAX47_ROUTER_MODEL", "RA72")
 ROUTER_FIRMWARE = os.environ.get("RELAX47_ROUTER_FIRMWARE", "1.0.122")
@@ -274,6 +275,8 @@ def tunnel_status() -> dict[str, Any]:
 def tool_gateway_status(_: dict[str, Any]) -> dict[str, Any]:
     return {
         "version": VERSION, "started_at": STARTED_AT,
+        "tool_catalog": {"count": len(TOOLS), "names": sorted(TOOLS)},
+        "backup_retention": BackupRetention(maintenance_manager(), lambda: WRITE_MODE).status(),
         "router": {"host": ROUTER_HOST, "model": ROUTER_MODEL, "firmware_expected": ROUTER_FIRMWARE},
         "lan_cidr": LAN_CIDR, "write_mode": WRITE_MODE,
         "auto_verify_writes": AUTO_VERIFY_WRITES,
@@ -933,6 +936,23 @@ def tool_sql_install_upload(arguments: dict[str, Any]) -> dict[str, Any]:
  reason=require_write(arguments); return sanitize(sql_manager().install_upload(arguments,reason))
 
 
+def tool_sql_runtime_plan(_):
+    return sanitize(preflight(sql_manager()))
+
+
+def tool_sql_runtime_status(_):
+    return sanitize(runtime_status(sql_manager()))
+
+
+def tool_sql_migrate_runtime(arguments):
+    reason = require_write(arguments)
+    timezone_name = ha_request("/config").get("time_zone")
+    if not isinstance(timezone_name, str) or not timezone_name:
+        raise ValueError("Home Assistant timezone is unavailable")
+    return sanitize(migrate_runtime(sql_manager(), arguments, reason, timezone_name,
+                                    maintenance_manager()._core_check))
+
+
 def tool_sql_prepare_runtime(arguments):
     reason = require_write(arguments)
     return sanitize(prepare_runtime(sql_manager(), arguments, reason))
@@ -1192,6 +1212,9 @@ TOOLS: dict[str, Tool] = {
     "localtuya_apply_batch": ("Последовательно применить подготовленные LocalTuya-транзакции, продолжая после ошибки отдельного устройства.", {"type": "object", "properties": {"transaction_ids": {"type": "array", "items": {"type": "string"}}, "change_reason": {"type": "string"}, "confirmation_code": {"type": "string"}}, "required": ["transaction_ids", "change_reason"]}, tool_localtuya_apply_batch, WRITE_SAFE),
     "localtuya_rollback": ("Откатить одну применённую LocalTuya-транзакцию по защищённому локальному снимку.", {"type": "object", "properties": {"transaction_id": {"type": "string"}, "change_reason": {"type": "string"}, "confirmation_code": {"type": "string"}}, "required": ["transaction_id", "change_reason"]}, tool_localtuya_rollback, WRITE_DESTRUCTIVE),
     "sql_database_status": ("Проверить SQLite-базу RELAX47 без чтения строк.", {"type":"object","properties":{}}, tool_sql_database_status, READ_ONLY),
+    "sql_runtime_migration_plan": ("Проверить совместимость восьми Store и кода HA без изменения файлов. Возвращает SHA-256 плана; строки данных не читает.", {"type":"object","properties":{}}, tool_sql_runtime_plan, READ_ONLY),
+    "sql_runtime_migration_status": ("Показать установленный SQL-адаптер и версии документов без гостевых данных.", {"type":"object","properties":{}}, tool_sql_runtime_status, READ_ONLY),
+    "sql_migrate_runtime": ("Первичный перенос восьми Store HA в SQL с сохранением полных данных и переключением существующих модулей. Требует свежий план, backup и остановку Core; существующая SQL-база не перезаписывается. Не нормализует бизнес-таблицы 8.0.", {"type":"object","properties":{"expected_plan_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"stop_home_assistant":{"type":"boolean"},"confirm_other_writers_stopped":{"type":"boolean"},"change_reason":{"type":"string"},"confirmation_code":{"type":"string"}},"required":["expected_plan_sha256","stop_home_assistant","confirm_other_writers_stopped","change_reason"]}, tool_sql_migrate_runtime, WRITE_SAFE),
     "sql_prepare_runtime_migration": ("Создать приватный SQL-снимок восьми разрешённых Store RELAX47 с проверкой обратного чтения. Backup и остановка Core обязательны. Не переключает рабочую программу и не нормализует данные.", {"type":"object","properties":{"stop_home_assistant":{"type":"boolean"},"confirm_other_writers_stopped":{"type":"boolean"},"change_reason":{"type":"string"},"confirmation_code":{"type":"string"}},"required":["stop_home_assistant","confirm_other_writers_stopped","change_reason"]}, tool_sql_prepare_runtime, WRITE_SAFE),
     "maintenance_backup_retention": ("Включить или выключить ежедневную очистку: три последних и защищённые копии. Настройка сохраняется; первый запуск через 24 часа.", {"type":"object","properties":{"enabled":{"type":"boolean"},"change_reason":{"type":"string"},"confirmation_code":{"type":"string"}},"required":["enabled","change_reason"]}, tool_backup_retention, WRITE_SAFE),
     "sql_inspect_upload": ("Проверить staged SQLite.", {"type":"object","properties":{"upload_id":{"type":"string"}},"required":["upload_id"]}, tool_sql_inspect_upload, READ_ONLY),
@@ -1234,7 +1257,7 @@ def safe_error(exc: Exception) -> str:
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
-    server_version = "RELAX47Gateway/7.14.11"
+    server_version = "RELAX47Gateway/7.14.12"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[{self.log_date_time_string()}] {self.client_address[0]} {fmt % args}", flush=True)

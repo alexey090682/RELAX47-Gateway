@@ -185,6 +185,11 @@ class Relax47SQLManager:
             if self.stop_callback is None or self.start_callback is None:
                 raise RuntimeError("Supervisor lifecycle callbacks are unavailable")
             target = self._target()
+            if target.exists():
+                with closing(_read(target)) as current_db:
+                    backend = current_db.execute("SELECT value FROM relax47_meta WHERE key='runtime_backend'").fetchone()
+                    if backend == ('sqlite_store_v1',):
+                        raise PermissionError("Active HA SQL storage cannot be replaced by an upload; use a reviewed migration")
             safety = self.backup_callback("Safety backup before RELAX47 SQL install: " + reason)
             if not isinstance(safety, dict) or safety.get("verified") is not True:
                 raise RuntimeError("A verified Home Assistant backup is required")

@@ -55,6 +55,16 @@ class BackupRetention:
             self._save(policy)
             return self._read()
 
+    def status(self):
+        # Read only: diagnostics must not enable or run cleanup.
+        try:
+            policy = self._read()
+            return {key: policy[key] for key in (
+                'enabled', 'keep_last', 'next_run', 'interval_hours',
+                'last_deleted_count', 'last_failed_count') if key in policy}
+        except (OSError, ValueError, TypeError):
+            return {'enabled': False, 'status': 'invalid_policy_cleanup_blocked'}
+
     def tick(self):
         with self._guard():
             policy = self._read()
