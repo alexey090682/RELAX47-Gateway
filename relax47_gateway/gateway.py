@@ -27,9 +27,11 @@ from typing import Any, Callable
 from localtuya_migration import LocalTuyaManager
 from maintenance import MaintenanceManager
 from sql_migration import Relax47SQLManager
+from runtime_migration import prepare_runtime
+from backup_retention import BackupRetention
 
 
-VERSION = "7.14.10"
+VERSION = "7.14.11"
 ROUTER_HOST = os.environ.get("RELAX47_ROUTER_HOST", "192.168.31.1")
 ROUTER_MODEL = os.environ.get("RELAX47_ROUTER_MODEL", "RA72")
 ROUTER_FIRMWARE = os.environ.get("RELAX47_ROUTER_FIRMWARE", "1.0.122")
@@ -931,6 +933,16 @@ def tool_sql_install_upload(arguments: dict[str, Any]) -> dict[str, Any]:
  reason=require_write(arguments); return sanitize(sql_manager().install_upload(arguments,reason))
 
 
+def tool_sql_prepare_runtime(arguments):
+    reason = require_write(arguments)
+    return sanitize(prepare_runtime(sql_manager(), arguments, reason))
+
+
+def tool_backup_retention(arguments):
+    reason = require_write(arguments)
+    return sanitize(BackupRetention(maintenance_manager(), lambda: WRITE_MODE).configure(arguments.get('enabled'), reason))
+
+
 def tool_maintenance_status(arguments: dict[str, Any]) -> dict[str, Any]:
     return sanitize(maintenance_manager().status(arguments.get("upload_id")))
 
@@ -1180,6 +1192,8 @@ TOOLS: dict[str, Tool] = {
     "localtuya_apply_batch": ("Последовательно применить подготовленные LocalTuya-транзакции, продолжая после ошибки отдельного устройства.", {"type": "object", "properties": {"transaction_ids": {"type": "array", "items": {"type": "string"}}, "change_reason": {"type": "string"}, "confirmation_code": {"type": "string"}}, "required": ["transaction_ids", "change_reason"]}, tool_localtuya_apply_batch, WRITE_SAFE),
     "localtuya_rollback": ("Откатить одну применённую LocalTuya-транзакцию по защищённому локальному снимку.", {"type": "object", "properties": {"transaction_id": {"type": "string"}, "change_reason": {"type": "string"}, "confirmation_code": {"type": "string"}}, "required": ["transaction_id", "change_reason"]}, tool_localtuya_rollback, WRITE_DESTRUCTIVE),
     "sql_database_status": ("Проверить SQLite-базу RELAX47 без чтения строк.", {"type":"object","properties":{}}, tool_sql_database_status, READ_ONLY),
+    "sql_prepare_runtime_migration": ("Создать приватный SQL-снимок восьми разрешённых Store RELAX47 с проверкой обратного чтения. Backup и остановка Core обязательны. Не переключает рабочую программу и не нормализует данные.", {"type":"object","properties":{"stop_home_assistant":{"type":"boolean"},"confirm_other_writers_stopped":{"type":"boolean"},"change_reason":{"type":"string"},"confirmation_code":{"type":"string"}},"required":["stop_home_assistant","confirm_other_writers_stopped","change_reason"]}, tool_sql_prepare_runtime, WRITE_SAFE),
+    "maintenance_backup_retention": ("Включить или выключить ежедневную очистку: три последних и защищённые копии. Настройка сохраняется; первый запуск через 24 часа.", {"type":"object","properties":{"enabled":{"type":"boolean"},"change_reason":{"type":"string"},"confirmation_code":{"type":"string"}},"required":["enabled","change_reason"]}, tool_backup_retention, WRITE_SAFE),
     "sql_inspect_upload": ("Проверить staged SQLite.", {"type":"object","properties":{"upload_id":{"type":"string"}},"required":["upload_id"]}, tool_sql_inspect_upload, READ_ONLY),
     "sql_install_upload": ("Установить SQLite RELAX47 в согласованное окно обслуживания: backup, остановка Core, проверка, rollback при ошибке, запуск Core.", {"type":"object","properties":{"upload_id":{"type":"string"},"expected_sha256":{"type":"string"},"stop_home_assistant":{"type":"boolean"},"confirm_other_writers_stopped":{"type":"boolean"},"change_reason":{"type":"string"},"confirmation_code":{"type":"string"}},"required":["upload_id","expected_sha256","stop_home_assistant","confirm_other_writers_stopped","change_reason"]}, tool_sql_install_upload, WRITE_SAFE),
     "maintenance_status": ("Проверить загрузки, ограничения и результат автономного обновления без раскрытия содержимого файлов.", {"type": "object", "properties": {"upload_id": {"type": "string"}}}, tool_maintenance_status, READ_ONLY),
@@ -1220,7 +1234,7 @@ def safe_error(exc: Exception) -> str:
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
-    server_version = "RELAX47Gateway/7.14.10"
+    server_version = "RELAX47Gateway/7.14.11"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[{self.log_date_time_string()}] {self.client_address[0]} {fmt % args}", flush=True)
@@ -1333,5 +1347,7 @@ def serve(port: int) -> None:
 
 
 if __name__ == "__main__":
+    retention = BackupRetention(maintenance_manager(), lambda: WRITE_MODE)
+    threading.Thread(target=retention.run, daemon=True).start()
     threading.Thread(target=serve, args=(8099,), daemon=True).start()
     serve(8765)
