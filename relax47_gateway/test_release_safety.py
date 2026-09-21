@@ -115,7 +115,7 @@ class SQLSafetyTests(unittest.TestCase):
             self.manager.database_status()
 
     def test_rejects_unknown_schema_and_foreign_key_violation(self):
-        for version in (0,10):
+        for version in (0,12):
             path = self.root/f'schema-{version}.db'
             database(path,version=version)
             with self.assertRaises(ValueError):
@@ -135,6 +135,91 @@ class SQLSafetyTests(unittest.TestCase):
             result = self.manager.database_status()
             self.assertEqual(next(o['row_count'] for o in result['objects'] if o['name']=='stays'),2)
             self.assertEqual(result['sha256_scope'],'sqlite_snapshot')
+
+    def canonical_database(self, version):
+        path = self.root / f'canonical-{version}-{uuid.uuid4().hex}.db'
+        schema = Path(__file__).parent / 'sql_schemas' / f'schema-{version}.sql'
+        with closing(sqlite3.connect(path)) as conn:
+            conn.executescript(schema.read_text())
+        return path
+
+    def stage(self, path):
+        self.manager._copy_database(path, self.source)
+        self.meta.update(sha256=_sha(self.source), size_bytes=self.source.stat().st_size)
+        self.write_meta()
+        self.args['expected_sha256'] = self.meta['sha256']
+
+    def test_canonical_preservation_and_media_schemas(self):
+        for version in (10, 11):
+            with self.subTest(version=version):
+                path = self.canonical_database(version)
+                result = self.manager._inspect(path)
+                self.assertEqual(result['schema_version'], version)
+                self.assertEqual(result['schema_validation'], 'canonical_contract')
+                self.stage(path)
+                result = self.manager.install_upload(self.args, 'schema test')
+                self.assertEqual(result['schema_version'], version)
+
+    def test_schema_number_alone_does_not_prove_compatibility(self):
+        for version in (10, 11):
+            path = self.root / f'fake-{version}.db'
+            database(path, version=version)
+            with self.assertRaisesRegex(ValueError, 'missing required'):
+                self.manager._inspect(path)
+
+    def test_changed_contract_and_missing_objects_fail(self):
+        for statement in (
+                'DROP VIEW system_journal',
+                'DROP INDEX idx_stay_video_jobs_due',
+                'ALTER TABLE stay_video_jobs ADD COLUMN unexpected TEXT'):
+            with self.subTest(statement=statement):
+                path = self.canonical_database(11)
+                with closing(sqlite3.connect(path)) as conn:
+                    conn.execute(statement)
+                    conn.commit()
+                with self.assertRaisesRegex(ValueError, 'Schema 11:'):
+                    self.manager._inspect(path)
+
+    def test_extra_tables_are_retained(self):
+        path = self.canonical_database(11)
+        with closing(sqlite3.connect(path)) as conn:
+            conn.executescript("CREATE TABLE extension_data(value TEXT);"
+                               "INSERT INTO extension_data VALUES('keep me');")
+        self.stage(path)
+        self.manager.install_upload(self.args, 'extension preservation')
+        with closing(sqlite3.connect(self.manager.database_path)) as conn:
+            self.assertEqual(conn.execute('SELECT value FROM extension_data').fetchone()[0], 'keep me')
+
+    def test_invalid_composite_foreign_key_contract(self):
+        path = self.canonical_database(11)
+        with closing(sqlite3.connect(path)) as conn:
+            conn.execute('DROP INDEX ux_stays_property_id')
+        with self.assertRaisesRegex(ValueError, 'foreign_key_check'):
+            self.manager._inspect(path)
+
+    def test_schema_11_audit_failure_restores_schema_10(self):
+        self.stage(self.canonical_database(10))
+        self.manager.install_upload(self.args, 'baseline')
+        self.stage(self.canonical_database(11))
+        self.manager.audit_callback = Mock(side_effect=RuntimeError('audit failed'))
+        with self.assertRaisesRegex(RuntimeError, 'audit failed'):
+            self.manager.install_upload(self.args, 'upgrade')
+        self.assertEqual(self.manager.database_status()['schema_version'], 10)
+        self.assertEqual(self.calls[-1], 'start')
+
+    def test_downgrade_rejected_without_replacing_target(self):
+        self.stage(self.canonical_database(11))
+        self.manager.install_upload(self.args, 'first install')
+        self.stage(self.canonical_database(10))
+        with self.assertRaisesRegex(ValueError, 'downgrade'):
+            self.manager.install_upload(self.args, 'unsafe downgrade')
+        self.assertEqual(self.manager.database_status()['schema_version'], 11)
+        self.assertEqual(self.calls[-1], 'start')
+
+    def test_status_advertises_support_before_install(self):
+        result = self.manager.database_status()
+        self.assertFalse(result['installed'])
+        self.assertEqual(result['supported_schema_version'], 11)
 
 
 class MaintenanceSafetyTests(unittest.TestCase):

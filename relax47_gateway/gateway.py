@@ -29,7 +29,7 @@ from maintenance import MaintenanceManager
 from sql_migration import Relax47SQLManager
 
 
-VERSION = "7.14.9"
+VERSION = "7.14.10"
 ROUTER_HOST = os.environ.get("RELAX47_ROUTER_HOST", "192.168.31.1")
 ROUTER_MODEL = os.environ.get("RELAX47_ROUTER_MODEL", "RA72")
 ROUTER_FIRMWARE = os.environ.get("RELAX47_ROUTER_FIRMWARE", "1.0.122")
@@ -1220,7 +1220,7 @@ def safe_error(exc: Exception) -> str:
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
-    server_version = "RELAX47Gateway/7.14.9"
+    server_version = "RELAX47Gateway/7.14.10"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[{self.log_date_time_string()}] {self.client_address[0]} {fmt % args}", flush=True)

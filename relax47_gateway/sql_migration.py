@@ -12,8 +12,34 @@ import threading
 import time
 import uuid
 
-SUPPORTED_SCHEMA_VERSION = 9
+SUPPORTED_SCHEMA_VERSION = 11
 TARGET = "relax47_v8/relax47.db"
+
+
+def _validate_schema(conn, version):
+    """New preservation/media schemas must match the shipped structural contract.
+
+    This validates an upload; it never runs migrations against user data.
+    Older schemas retain their existing validation for rollback compatibility.
+    Additional application objects are preserved, not removed.
+    """
+    if version < 10:
+        return "legacy_identity"
+    reference = Path(__file__).with_name("sql_schemas") / f"schema-{version}.sql"
+    with closing(sqlite3.connect(":memory:")) as expected:
+        expected.executescript(reference.read_text(encoding="utf-8"))
+        for name, kind, definition in expected.execute(
+                "SELECT name,type,sql FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"):
+            actual = conn.execute(
+                "SELECT type,sql FROM sqlite_master WHERE name=?", (name,)).fetchone()
+            if actual is None or actual[0] != kind:
+                raise ValueError(f"Schema {version}: missing required {kind} {name}")
+            # Canonical definitions retain CHECKs, composite FKs, unique/partial
+            # indexes and journal view semantics, not just names/row counts.
+            if actual[1].strip() != definition.strip():
+                raise ValueError(f"Schema {version}: incompatible definition for {name}")
+    return "canonical_contract"
 
 
 def _sha(path):
@@ -81,7 +107,11 @@ class Relax47SQLManager:
             for check in ("quick_check", "integrity_check"):
                 if conn.execute("PRAGMA " + check).fetchall() != [("ok",)]:
                     raise ValueError(check + " failed")
-            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            try:
+                foreign_key_error = conn.execute("PRAGMA foreign_key_check").fetchone()
+            except sqlite3.Error as exc:
+                raise ValueError("foreign_key_check failed: invalid schema relationships") from exc
+            if foreign_key_error is not None:
                 raise ValueError("foreign_key_check failed")
             try:
                 row = conn.execute("SELECT value FROM relax47_meta WHERE key='schema_version'").fetchone()
@@ -90,6 +120,7 @@ class Relax47SQLManager:
                 raise ValueError("Missing RELAX47 schema identity") from exc
             if not 1 <= schema <= SUPPORTED_SCHEMA_VERSION:
                 raise ValueError("Unsupported RELAX47 schema version")
+            schema_validation = _validate_schema(conn, schema)
             objects = []
             for name, kind in conn.execute("SELECT name,type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type,name"):
                 count = None
@@ -98,6 +129,7 @@ class Relax47SQLManager:
                 objects.append({"name": name, "type": kind, "row_count": count})
         return {"sha256": _sha(path), "size_bytes": path.stat().st_size,
                 "schema_version": schema, "supported_schema_version": SUPPORTED_SCHEMA_VERSION,
+                "schema_validation": schema_validation,
                 "quick_check": "ok", "integrity_check": "ok", "foreign_key_check": "ok",
                 "objects": objects, "row_data_exposed": False}
 
@@ -115,7 +147,8 @@ class Relax47SQLManager:
         with self.lock:
             target = self._target()
             if not target.exists():
-                return {"installed": False, "path": TARGET}
+                return {"installed": False, "path": TARGET,
+                        "supported_schema_version": SUPPORTED_SCHEMA_VERSION}
             self.backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             snapshot = self.backup_dir / (".status-" + uuid.uuid4().hex + ".db")
             try:
@@ -164,6 +197,9 @@ class Relax47SQLManager:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 self.backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
                 if existed:
+                    current = self._inspect(target)
+                    if current["schema_version"] > inspected["schema_version"]:
+                        raise ValueError("SQL schema downgrade is not allowed")
                     previous = self.backup_dir / (uuid.uuid4().hex + "-relax47.db")
                     previous.touch(mode=0o600, exist_ok=False)
                     self._copy_database(target, previous)

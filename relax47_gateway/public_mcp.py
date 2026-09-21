@@ -329,7 +329,7 @@ def authenticate(header: str | None) -> dict[str, Any] | None:
 
 
 class PublicMCPHandler(BaseHTTPRequestHandler):
-    server_version = "RELAX47PublicMCP/7.14.9"
+    server_version = "RELAX47PublicMCP/7.14.10"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[public-mcp {self.log_date_time_string()}] {self.client_address[0]} {fmt % args}", flush=True)
