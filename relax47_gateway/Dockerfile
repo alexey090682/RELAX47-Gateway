@@ -42,7 +42,7 @@ COPY gateway.py /opt/relax47/gateway.py
 COPY localtuya_migration.py /opt/relax47/localtuya_migration.py
 COPY maintenance.py /opt/relax47/maintenance.py
 COPY sql_migration.py /opt/relax47/sql_migration.py
-COPY runtime_migration.py runtime_cutover.py ha_sql_store.py backup_retention.py /opt/relax47/
+COPY sql_normalization.py runtime_migration.py runtime_cutover.py ha_sql_store.py backup_retention.py /opt/relax47/
 COPY sql_schemas /opt/relax47/sql_schemas
 COPY relax47_pytuya.py /opt/relax47/relax47_pytuya.py
 COPY public_mcp.py /opt/relax47/public_mcp.py
@@ -58,3 +58,4 @@ LABEL \
     io.hass.version="${BUILD_VERSION}" \
     io.hass.type="app" \
     io.hass.arch="${BUILD_ARCH}"
+
