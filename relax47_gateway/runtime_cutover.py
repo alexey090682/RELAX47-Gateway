@@ -155,6 +155,9 @@ def runtime_status(manager):
             conn.execute('PRAGMA query_only=ON')
             conn.execute('PRAGMA trusted_schema=OFF')
             row = conn.execute("SELECT value FROM relax47_meta WHERE key='runtime_backend'").fetchone()
+            blocked = conn.execute("SELECT value FROM relax47_meta WHERE key='relational_migration_blocked'").fetchone()
+            if blocked:
+                summary['relational_migration_blocked'] = json.loads(blocked[0])
             if row == ('sqlite_relational_v1',):
                 summary['backend'] = row[0]
                 summary['normalized_business_rows'] = True

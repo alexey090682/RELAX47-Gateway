@@ -11,6 +11,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import sqlite3
@@ -350,6 +351,9 @@ def migrate(conn, path, *, verify_deployment=True):
             return
         if meta.get('schema_version') != '11' or meta.get('runtime_backend') != 'sqlite_store_v1':
             raise RuntimeError('Unexpected schema/backend; migration refused')
+        blocked = json.loads(meta.get('relational_migration_blocked') or '{}')
+        if blocked.get('adapter_sha256') == digest(Path(__file__).read_bytes()):
+            raise RuntimeError('Migration is blocked after a rolled-back attempt; compatibility remains active')
         if verify_deployment:
             check_deployment(path)
         for table in TABLES | {'source_snapshots', 'runtime_heads'}:
@@ -416,6 +420,7 @@ def migrate(conn, path, *, verify_deployment=True):
         conn.execute("UPDATE relax47_meta SET value='12' WHERE key='schema_version'")
         conn.execute("UPDATE relax47_meta SET value=? WHERE key='runtime_backend'", (BACKEND,))
         conn.execute("UPDATE relax47_meta SET value='relational_primary' WHERE key='migration_stage'")
+        conn.execute("DELETE FROM relax47_meta WHERE key='relational_migration_blocked'")
         conn.commit()
     except BaseException:
         conn.rollback()
@@ -461,6 +466,7 @@ class Store:
         self.revision = None
         self.envelope = None
         self.lock = asyncio.Lock()
+        self.compatibility_mode = False
 
     def _check(self, conn):
         if conn.execute("SELECT value FROM relax47_meta WHERE key='runtime_backend'").fetchone() != (BACKEND,):
@@ -468,7 +474,23 @@ class Store:
 
     def _load(self):
         with closing(connect(self.path)) as conn:
-            migrate(conn, self.path)
+            try:
+                migrate(conn, self.path)
+            except Exception as exc:
+                # A failed migration must not take the working business modules
+                # offline. This fallback is only to the intact schema-11 SQL
+                # source after rollback, never to old .storage files.
+                conn.rollback()
+                meta = dict(conn.execute('SELECT key,value FROM relax47_meta'))
+                if meta.get('schema_version') != '11' or meta.get('runtime_backend') != 'sqlite_store_v1':
+                    raise
+                conn.execute('INSERT OR IGNORE INTO relax47_meta VALUES(?,?)',
+                    ('relational_migration_blocked', dumps({'adapter_sha256':digest(Path(__file__).read_bytes()), 'error':str(exc)[:240], 'at':now()})))
+                conn.commit()
+                logging.getLogger(__name__).error('RELAX47 relational migration rolled back; existing SQLite compatibility backend remains active: %s', type(exc).__name__)
+                self.compatibility_mode = True
+                revision, raw = conn.execute("SELECT version,payload_json FROM runtime_documents WHERE property_id=? AND namespace=? AND item_key='ha_store'", (PROPERTY,self.key)).fetchone()
+                return revision, json.loads(raw)
             conn.execute('BEGIN')
             self._check(conn)
             revision, header = conn.execute('SELECT revision,envelope_json FROM runtime_heads WHERE namespace=?', (self.key,)).fetchone()
@@ -485,6 +507,13 @@ class Store:
     def _save(self, payload):
         data = json.loads(payload)['data']
         with closing(connect(self.path)) as conn, conn:
+            if self.compatibility_mode:
+                if conn.execute("SELECT value FROM relax47_meta WHERE key='runtime_backend'").fetchone() != ('sqlite_store_v1',):
+                    raise RuntimeError('Compatibility backend changed; restart required')
+                changed = conn.execute("UPDATE runtime_documents SET payload_json=?,version=version+1,updated_at=? WHERE property_id=? AND namespace=? AND item_key='ha_store' AND version=?", (payload,now(),PROPERTY,self.key,self.revision)).rowcount
+                if changed != 1:
+                    raise RuntimeError('Concurrent compatibility update; stale write rejected')
+                return
             self._check(conn)
             changed = conn.execute('UPDATE runtime_heads SET revision=revision+1,updated_at=? WHERE namespace=? AND revision=?',
                                    (now(), self.key, self.revision)).rowcount

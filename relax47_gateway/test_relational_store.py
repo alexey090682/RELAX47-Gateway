@@ -186,5 +186,17 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await s.async_save(data)
         self.assertEqual(await m.Store(self.hass(),1,m.STORES[5]).async_load(),data)
 
+    async def test_failed_cutover_keeps_existing_sql_available(self):
+        s=m.Store(self.hass(),1,m.STORES[0])
+        with patch.object(m,'write_data',side_effect=ValueError('unsupported legacy shape')):
+            data=await s.async_load()
+        self.assertTrue(s.compatibility_mode)
+        self.assertEqual(data,self.docs[m.STORES[0]])
+        data['settings']['x']='saved after rejected migration'
+        await s.async_save(data)
+        fresh=m.Store(self.hass(),1,m.STORES[0])
+        self.assertEqual(await fresh.async_load(),data)
+        self.assertTrue(fresh.compatibility_mode)
+
 
 if __name__=='__main__':unittest.main()
