@@ -1,6 +1,8 @@
 #!/usr/bin/with-contenv bashio
 set -euo pipefail
 
+ha_user_token="$(bashio::config 'ha_user_token' '')"
+
 router_host="$(bashio::config 'router_host')"
 router_model="$(bashio::config 'router_model')"
 router_firmware="$(bashio::config 'router_firmware')"
@@ -32,6 +34,7 @@ reverse_ssh_user="$(bashio::config 'reverse_ssh_user')"
 reverse_ssh_remote_port="$(bashio::config 'reverse_ssh_remote_port')"
 reverse_ssh_private_key="$(bashio::config 'reverse_ssh_private_key')"
 
+export RELAX47_HA_USER_TOKEN="$ha_user_token"
 export RELAX47_ROUTER_HOST="$router_host"
 export RELAX47_ROUTER_MODEL="$router_model"
 export RELAX47_ROUTER_FIRMWARE="$router_firmware"

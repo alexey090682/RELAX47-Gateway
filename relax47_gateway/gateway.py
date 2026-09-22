@@ -15,6 +15,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -33,7 +34,7 @@ from sql_normalization import normalization_plan
 from backup_retention import BackupRetention
 
 
-VERSION = "7.14.15"
+VERSION = "7.14.16"
 ROUTER_HOST = os.environ.get("RELAX47_ROUTER_HOST", "192.168.31.1")
 ROUTER_MODEL = os.environ.get("RELAX47_ROUTER_MODEL", "RA72")
 ROUTER_FIRMWARE = os.environ.get("RELAX47_ROUTER_FIRMWARE", "1.0.122")
@@ -56,6 +57,9 @@ ALLOWED_DOMAINS = {
 }
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 HA_API = "http://supervisor/core/api"
+# Set only by the owner in the add-on configuration. Empty preserves existing behavior.
+HA_USER_TOKEN = os.environ.get("RELAX47_HA_USER_TOKEN", "").strip()
+HA_USER_API = "http://homeassistant:8123/api"
 CONFIG_DIR = Path(os.environ.get("RELAX47_CONFIG_DIR", "/homeassistant"))
 SHARE_DIR = Path(os.environ.get("RELAX47_SHARE_DIR", "/share"))
 AUDIT_PATH = Path(os.environ.get("RELAX47_AUDIT_PATH", "/data/RELAX47_AUDIT.jsonl"))
@@ -150,6 +154,11 @@ def json_compatible(value: Any) -> Any:
     return str(value)
 
 
+class NoCredentialRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "Redirect rejected for authenticated Core request", headers, fp)
+
+
 def request_json(
     url: str,
     *,
@@ -157,6 +166,7 @@ def request_json(
     data: Any = None,
     headers: dict[str, str] | None = None,
     timeout: float = 5.0,
+    allow_redirects: bool = True,
 ) -> Any:
     request_headers = {"Accept": "application/json", **(headers or {})}
     payload = None
@@ -164,7 +174,8 @@ def request_json(
         payload = json.dumps(data).encode("utf-8")
         request_headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=payload, headers=request_headers, method=method)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    opener = urllib.request.urlopen if allow_redirects else urllib.request.build_opener(NoCredentialRedirect()).open
+    with opener(request, timeout=timeout) as response:
         body = response.read(4 * 1024 * 1024)
         return json.loads(body.decode("utf-8")) if body else {}
 
@@ -173,11 +184,17 @@ def ha_request(
     path: str, *, method: str = "GET", data: Any = None,
     timeout: float = 20.0,
 ) -> Any:
-    if not SUPERVISOR_TOKEN:
-        raise RuntimeError("SUPERVISOR_TOKEN is unavailable")
+    if not path.startswith("/") or path.startswith("//") or "://" in path:
+        raise ValueError("Expected a relative Home Assistant API path")
+    # User credentials must go directly to Core, never to the Supervisor API.
+    # An invalid/revoked user credential MUST NOT fall back to another identity.
+    credential = HA_USER_TOKEN or SUPERVISOR_TOKEN
+    api = HA_USER_API if HA_USER_TOKEN else HA_API
+    if not credential:
+        raise RuntimeError("Home Assistant authentication is not configured")
     return request_json(
-        f"{HA_API}{path}", method=method, data=data,
-        headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}, timeout=timeout,
+        f"{api}{path}", method=method, data=data,
+        headers={"Authorization": f"Bearer {credential}"}, timeout=timeout, allow_redirects=False,
     )
 
 
@@ -283,7 +300,9 @@ def tool_gateway_status(_: dict[str, Any]) -> dict[str, Any]:
         "auto_verify_writes": AUTO_VERIFY_WRITES,
         "admin_all_service_domains": ADMIN_ALL_SERVICE_DOMAINS,
         "router_password_configured": bool(ROUTER_PASSWORD),
-        "home_assistant_api": "available" if SUPERVISOR_TOKEN else "unavailable",
+        "home_assistant_api": "configured" if (HA_USER_TOKEN or SUPERVISOR_TOKEN) else "unavailable",
+        "home_assistant_identity": "configured_user" if HA_USER_TOKEN else "supervisor_service",
+        "home_assistant_user_auth_configured": bool(HA_USER_TOKEN),
         "tunnel": tunnel_status(), "audit_path": str(AUDIT_PATH),
         "public_mcp": {
             "enabled": PUBLIC_MCP_ENABLED,
@@ -1291,7 +1310,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         routes: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "/api/status": tool_gateway_status, "/api/tunnel": tool_tunnel_status,
             "/api/router-auth": tool_router_auth_status, "/api/audit": tool_audit_log,
-            "/api/inventory": tool_export_inventory,
+            "/api/inventory": tool_export_inventory, "/api/ha-health": tool_ha_health,
         }
         if path in routes:
             try:
@@ -1309,6 +1328,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
 <h1>RELAX47 Local Gateway</h1><div class='card'><h2>Состояние</h2><p class='ok'>Шлюз запущен, версия {VERSION}</p>
 <p>AX6000: <code>{ROUTER_HOST}</code>, {ROUTER_MODEL}, прошивка {ROUTER_FIRMWARE}</p>
 <p>Режим записи: <strong>{'ВКЛЮЧЁН' if WRITE_MODE else 'выключен'}</strong>; проверка после записи: <strong>{'включена' if AUTO_VERIFY_WRITES else 'выключена'}</strong></p></div>
+<div class='card'><h2>Подключение к Home Assistant</h2>
+<p>Режим: <strong>{'учётная запись пользователя' if HA_USER_TOKEN else 'служебное подключение Supervisor'}</strong>.</p>
+<p>Для административных действий войдите в профиль нужного пользователя Home Assistant, создайте долгосрочный токен «RELAX47 Gateway» и вставьте его в поле «Ключ доступа пользователя Home Assistant» на вкладке «Конфигурация» этого дополнения. Сохраните настройки и перезапустите шлюз.</p>
+<p>Ключ даёт права именно выбранного пользователя. Отдельный пароль шлюза не создаёт роль RELAX47. Для отзыва удалите токен в профиле Home Assistant. Ключ здесь не отображается.</p>
+<p><a href='api/ha-health'>Проверить подключение к Home Assistant</a></p></div>
 <div class='card'><h2>Связь с OpenAI</h2><p>Состояние: <strong>{tunnel.get('state')}</strong>; ready: <strong>{'да' if tunnel.get('ready') else 'нет'}</strong></p><p>{tunnel.get('diagnosis') or tunnel.get('detail', '')}</p><p>Входящий порт на роутере не требуется.</p></div>
 <div class='card'><h2>Что умеет версия</h2><ul><li>полная карта HA, DHCP, клиентов, Tuya и TCP-портов;</li><li>проверяемые DHCP-привязки с защитой конфликтов и откатом;</li><li>вызовы разрешённых сервисов HA с чтением результата;</li><li>постоянный локальный журнал всех изменений.</li></ul></div>
 <div class='card'><h2>Диагностика</h2><p><a href='api/status'>Статус</a></p><p><a href='api/tunnel'>Secure MCP</a></p><p><a href='api/router-auth'>Авторизация AX6000</a></p><p><a href='api/inventory'>Полная инвентаризация</a></p><p><a href='api/audit'>Журнал изменений</a></p></div>

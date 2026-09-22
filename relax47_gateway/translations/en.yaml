@@ -1,4 +1,7 @@
 configuration:
+  ha_user_token:
+    name: Home Assistant user access token
+    description: Optional long-lived token entered by the owner. Core calls use that user; no automatic role grants. Restart after saving.
   router_host:
     name: Router address
     description: Main Xiaomi AX6000 LAN address.
