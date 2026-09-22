@@ -155,6 +155,18 @@ def runtime_status(manager):
             conn.execute('PRAGMA query_only=ON')
             conn.execute('PRAGMA trusted_schema=OFF')
             row = conn.execute("SELECT value FROM relax47_meta WHERE key='runtime_backend'").fetchone()
+            if row == ('sqlite_relational_v1',):
+                summary['backend'] = row[0]
+                summary['normalized_business_rows'] = True
+                summary['runtime_documents_frozen'] = True
+                summary['stores'] = [{'store': key, 'revision': revision} for key, revision in conn.execute(
+                    'SELECT namespace,revision FROM runtime_heads ORDER BY namespace') if key in STORES]
+                verified = conn.execute('SELECT adapter_version,verified_at,parity_verified FROM runtime_migration_runs WHERE id=?', ('relational12',)).fetchone()
+                summary['migration'] = {'adapter_version': verified[0], 'verified_at': verified[1], 'full_reverse_read_parity': bool(verified[2])} if verified else None
+                summary['row_counts'] = {table: conn.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in (
+                    'stays','vehicles','passes','pass_requests','gate_events','events','stay_violations','runtime_fields','runtime_items','source_snapshots')}
+                summary['unresolved_legacy_links'] = conn.execute('SELECT count(*) FROM runtime_unresolved_links').fetchone()[0]
+                return summary
             summary['backend'] = row[0] if row and row[0] == 'sqlite_store_v1' else 'other'
             summary['stores'] = [{'store': key, 'revision': revision} for key, revision in conn.execute(
                 "SELECT namespace,version FROM runtime_documents WHERE property_id='relax47' AND item_key='ha_store'")

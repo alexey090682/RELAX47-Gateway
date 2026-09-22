@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 
-SUPPORTED_SCHEMA_VERSION = 11
+SUPPORTED_SCHEMA_VERSION = 12
 TARGET = "relax47_v8/relax47.db"
 
 

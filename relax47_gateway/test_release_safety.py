@@ -159,7 +159,7 @@ class SQLSafetyTests(unittest.TestCase):
         self.args['expected_sha256'] = self.meta['sha256']
 
     def test_canonical_preservation_and_media_schemas(self):
-        for version in (10, 11):
+        for version in (10, 11, 12):
             with self.subTest(version=version):
                 path = self.canonical_database(version)
                 result = self.manager._inspect(path)
@@ -228,7 +228,7 @@ class SQLSafetyTests(unittest.TestCase):
     def test_status_advertises_support_before_install(self):
         result = self.manager.database_status()
         self.assertFalse(result['installed'])
-        self.assertEqual(result['supported_schema_version'], 11)
+        self.assertEqual(result['supported_schema_version'], 12)
 
 
 class MaintenanceSafetyTests(unittest.TestCase):
