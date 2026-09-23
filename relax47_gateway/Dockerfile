@@ -46,9 +46,10 @@ COPY sql_normalization.py runtime_migration.py runtime_cutover.py ha_sql_store.p
 COPY sql_schemas /opt/relax47/sql_schemas
 COPY relax47_pytuya.py /opt/relax47/relax47_pytuya.py
 COPY public_mcp.py /opt/relax47/public_mcp.py
+COPY site_accounts.py /opt/relax47/site_accounts.py
 COPY run.sh /run.sh
 
-RUN chmod 0755 /run.sh /opt/relax47/gateway.py /opt/relax47/public_mcp.py \
+RUN chmod 0755 /run.sh /opt/relax47/gateway.py /opt/relax47/public_mcp.py /opt/relax47/site_accounts.py \
         /opt/relax47/localtuya_migration.py /opt/relax47/maintenance.py \
     && mkdir -p /data /share /homeassistant /run/relax47
 
@@ -58,5 +59,4 @@ LABEL \
     io.hass.version="${BUILD_VERSION}" \
     io.hass.type="app" \
     io.hass.arch="${BUILD_ARCH}"
-
 

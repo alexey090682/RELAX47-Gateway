@@ -10,6 +10,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from datetime import date, timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -26,6 +27,8 @@ class PublicMCPTests(unittest.TestCase):
             "RELAX47_AUDIT_PATH": str(Path(cls.tempdir.name) / "changes.jsonl"),
         })
         cls.mcp = importlib.import_module("public_mcp")
+        cls.mcp.SITE_ACCOUNT_STORE = cls.mcp.SiteAccountStore(Path(cls.tempdir.name) / "site.db")
+        cls.mcp.SITE_ACCOUNT_STORE.initialize()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), cls.mcp.PublicMCPHandler)
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -136,6 +139,43 @@ class PublicMCPTests(unittest.TestCase):
             self.mcp.gateway.tool_terminal_exec({"argv": ["head", "secrets.yaml"], "cwd": "/homeassistant"})
         with self.assertRaises(PermissionError):
             self.mcp.gateway.tool_terminal_exec({"argv": ["sh", "-c", "id"]})
+
+    def test_site_account_registration_quotes_and_logout(self):
+        origin = {"Origin": "https://relax-47.ru", "Content-Type": "application/json"}
+        status, headers, body = self.request(
+            "/mcp/site-account?action=register",
+            method="POST",
+            headers=origin,
+            payload={"name": "Марина", "email": "marina@example.test", "password": "StrongPass123", "consent": True},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "https://relax-47.ru")
+        token = body["sessionToken"]
+        auth = {**origin, "Authorization": f"Bearer {token}"}
+
+        status, _, session = self.request("/mcp/site-account?action=session", headers=auth)
+        self.assertEqual(status, 200)
+        self.assertEqual(session["user"]["email"], "marina@example.test")
+
+        checkin = date.today() + timedelta(days=30)
+        checkout = checkin + timedelta(days=2)
+        status, _, saved = self.request(
+            "/mcp/site-account?action=quotes",
+            method="POST",
+            headers=auth,
+            payload={"arrival": checkin.isoformat(), "departure": checkout.isoformat(), "guests": 4},
+        )
+        self.assertEqual(status, 201)
+        self.assertTrue(saved["quote"]["id"])
+        status, _, quotes = self.request("/mcp/site-account?action=quotes", headers=auth)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(quotes["quotes"]), 1)
+
+        status, _, _ = self.request("/mcp/site-account?action=logout", method="POST", headers=auth, payload={})
+        self.assertEqual(status, 200)
+        status, _, session = self.request("/mcp/site-account?action=session", headers=auth)
+        self.assertEqual(status, 200)
+        self.assertIsNone(session["user"])
 
 
 if __name__ == "__main__":
