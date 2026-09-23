@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import gateway
+from site_accounts import SiteAccountStore
 
 
 PORT = int(os.environ.get("RELAX47_PUBLIC_MCP_PORT", "8766"))
@@ -52,6 +53,13 @@ IDEMPOTENCY_LOCK = threading.Lock()
 IDEMPOTENCY: dict[str, tuple[int, dict[str, Any]]] = {}
 CONNECTION_AUDIT = Path(os.environ.get("RELAX47_CONNECTION_AUDIT_FILE", "/data/RELAX47_CONNECTION_AUDIT.jsonl"))
 CONNECTION_AUDIT_LOCK = threading.Lock()
+SITE_ALLOWED_ORIGINS = frozenset({"https://relax-47.ru", "https://www.relax-47.ru", "https://relax47.web.app"})
+SITE_ACCOUNT_PATH = "/mcp/site-account"
+SITE_ACCOUNT_MAX_BYTES = 32 * 1024
+SITE_ACCOUNT_STORE = SiteAccountStore()
+SITE_ACCOUNT_STORE.initialize()
+SITE_RATE_LOCK = threading.Lock()
+SITE_RATE_BUCKETS: dict[str, list[int]] = {}
 
 
 def now() -> int:
@@ -338,7 +346,7 @@ def authenticate(header: str | None) -> dict[str, Any] | None:
 
 
 class PublicMCPHandler(BaseHTTPRequestHandler):
-    server_version = "RELAX47PublicMCP/7.14.12"
+    server_version = "RELAX47PublicMCP/7.14.18"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[public-mcp {self.log_date_time_string()}] {self.client_address[0]} {fmt % args}", flush=True)
@@ -368,6 +376,95 @@ class PublicMCPHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(content)
+
+    def site_headers(self) -> dict[str, str] | None:
+        origin = self.headers.get("Origin", "")
+        if origin not in SITE_ALLOWED_ORIGINS:
+            return None
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Vary": "Origin",
+            "Referrer-Policy": "no-referrer",
+        }
+
+    def site_json_response(self, payload: Any, status: int = 200) -> None:
+        headers = self.site_headers()
+        if headers is None:
+            self.json_response({"error": "Недопустимый источник запроса."}, status=HTTPStatus.FORBIDDEN)
+            return
+        self.json_response(payload, status=status, headers=headers)
+
+    def site_token(self) -> str:
+        header = self.headers.get("Authorization", "")
+        return header[7:].strip() if header.startswith("Bearer ") else ""
+
+    def site_rate_allowed(self, action: str, identity: str, limit: int = 10) -> bool:
+        key = token_hash(f"site|{action}|{self.client_address[0]}|{identity.strip().casefold()}")
+        cutoff = now() - 3600
+        with SITE_RATE_LOCK:
+            recent = [stamp for stamp in SITE_RATE_BUCKETS.get(key, []) if stamp > cutoff]
+            if len(recent) >= limit:
+                SITE_RATE_BUCKETS[key] = recent
+                return False
+            SITE_RATE_BUCKETS[key] = recent + [now()]
+            return True
+
+    def handle_site_account_get(self, query: dict[str, list[str]]) -> None:
+        if self.site_headers() is None:
+            self.site_json_response({}, status=HTTPStatus.FORBIDDEN)
+            return
+        action = (query.get("action") or ["session"])[-1]
+        user = SITE_ACCOUNT_STORE.session_user(self.site_token())
+        if action == "session":
+            self.site_json_response({"authEnabled": True, "user": user})
+            return
+        if action == "quotes":
+            if not user:
+                self.site_json_response({"error": "Требуется вход в личный кабинет."}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self.site_json_response({"quotes": SITE_ACCOUNT_STORE.list_quotes(user["id"])})
+            return
+        self.site_json_response({"error": "Маршрут не найден."}, status=HTTPStatus.NOT_FOUND)
+
+    def handle_site_account_post(self, query: dict[str, list[str]]) -> None:
+        if self.site_headers() is None:
+            self.site_json_response({}, status=HTTPStatus.FORBIDDEN)
+            return
+        action = (query.get("action") or [""])[-1]
+        payload = json.loads(self.read_body(SITE_ACCOUNT_MAX_BYTES).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Некорректные данные.")
+        if action in {"register", "login"} and not self.site_rate_allowed(action, str(payload.get("email") or "")):
+            self.site_json_response({"error": "Слишком много попыток. Повторите позднее."}, status=HTTPStatus.TOO_MANY_REQUESTS)
+            return
+        try:
+            if action == "register":
+                user, token = SITE_ACCOUNT_STORE.register(payload)
+                self.site_json_response({"ok": True, "user": user, "sessionToken": token}, status=HTTPStatus.CREATED)
+                return
+            if action == "login":
+                user, token = SITE_ACCOUNT_STORE.login(payload)
+                self.site_json_response({"ok": True, "user": user, "sessionToken": token})
+                return
+            token = self.site_token()
+            user = SITE_ACCOUNT_STORE.session_user(token)
+            if action == "logout":
+                SITE_ACCOUNT_STORE.logout(token)
+                self.site_json_response({"ok": True})
+                return
+            if action == "quotes":
+                if not user:
+                    self.site_json_response({"error": "Требуется вход в личный кабинет."}, status=HTTPStatus.UNAUTHORIZED)
+                    return
+                quote = SITE_ACCOUNT_STORE.save_quote(user["id"], payload)
+                self.site_json_response({"ok": True, "quote": quote}, status=HTTPStatus.CREATED)
+                return
+            self.site_json_response({"error": "Маршрут не найден."}, status=HTTPStatus.NOT_FOUND)
+        except PermissionError as exc:
+            self.site_json_response({"error": str(exc)}, status=HTTPStatus.UNAUTHORIZED)
+        except ValueError as exc:
+            status = HTTPStatus.CONFLICT if "уже существует" in str(exc) else HTTPStatus.BAD_REQUEST
+            self.site_json_response({"error": str(exc)}, status=status)
 
     def read_body(self, limit: int = MAX_REQUEST_BYTES) -> bytes:
         announced = max(0, int(self.headers.get("Content-Length", "0")))
@@ -412,6 +509,9 @@ class PublicMCPHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
+        if path == SITE_ACCOUNT_PATH:
+            self.handle_site_account_get(urllib.parse.parse_qs(parsed.query, keep_blank_values=True))
+            return
         if path in {"/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"}:
             self.json_response(self.oauth_metadata())
             return
@@ -436,6 +536,19 @@ class PublicMCPHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:
         path = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
+        if path == SITE_ACCOUNT_PATH:
+            headers = self.site_headers()
+            if headers is None:
+                self.send_error(HTTPStatus.FORBIDDEN)
+                return
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Access-Control-Allow-Origin", headers["Access-Control-Allow-Origin"])
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            self.send_header("Access-Control-Max-Age", "600")
+            self.send_header("Vary", "Origin")
+            self.end_headers()
+            return
         if path != "/mcp":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -476,8 +589,12 @@ class PublicMCPHandler(BaseHTTPRequestHandler):
         self.html_response(page)
 
     def do_POST(self) -> None:
-        path = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
         try:
+            if path == SITE_ACCOUNT_PATH:
+                self.handle_site_account_post(urllib.parse.parse_qs(parsed.query, keep_blank_values=True))
+                return
             if path == "/oauth/register":
                 payload = json.loads(self.read_body().decode("utf-8"))
                 self.json_response(register_client(payload), status=HTTPStatus.CREATED)
