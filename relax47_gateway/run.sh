@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ha_user_token="$(bashio::config 'ha_user_token' '')"
+realtycalendar_ical_url_primary="$(bashio::config 'realtycalendar_ical_url_primary' '')"
+realtycalendar_ical_url_secondary="$(bashio::config 'realtycalendar_ical_url_secondary' '')"
+realtycalendar_sync_minutes="$(bashio::config 'realtycalendar_sync_minutes' '15')"
 
 router_host="$(bashio::config 'router_host')"
 router_model="$(bashio::config 'router_model')"
@@ -35,6 +38,9 @@ reverse_ssh_remote_port="$(bashio::config 'reverse_ssh_remote_port')"
 reverse_ssh_private_key="$(bashio::config 'reverse_ssh_private_key')"
 
 export RELAX47_HA_USER_TOKEN="$ha_user_token"
+export RELAX47_REALTYCALENDAR_ICAL_URL_PRIMARY="$realtycalendar_ical_url_primary"
+export RELAX47_REALTYCALENDAR_ICAL_URL_SECONDARY="$realtycalendar_ical_url_secondary"
+export RELAX47_REALTYCALENDAR_SYNC_MINUTES="$realtycalendar_sync_minutes"
 export RELAX47_ROUTER_HOST="$router_host"
 export RELAX47_ROUTER_MODEL="$router_model"
 export RELAX47_ROUTER_FIRMWARE="$router_firmware"

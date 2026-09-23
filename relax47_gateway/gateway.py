@@ -34,7 +34,7 @@ from sql_normalization import normalization_plan
 from backup_retention import BackupRetention
 
 
-VERSION = "7.14.16"
+VERSION = "7.14.17"
 ROUTER_HOST = os.environ.get("RELAX47_ROUTER_HOST", "192.168.31.1")
 ROUTER_MODEL = os.environ.get("RELAX47_ROUTER_MODEL", "RA72")
 ROUTER_FIRMWARE = os.environ.get("RELAX47_ROUTER_FIRMWARE", "1.0.122")
@@ -60,6 +60,14 @@ HA_API = "http://supervisor/core/api"
 # Set only by the owner in the add-on configuration. Empty preserves existing behavior.
 HA_USER_TOKEN = os.environ.get("RELAX47_HA_USER_TOKEN", "").strip()
 HA_USER_API = "http://homeassistant:8123/api"
+REALTYCALENDAR_ICAL_URLS = {
+    "primary": os.environ.get("RELAX47_REALTYCALENDAR_ICAL_URL_PRIMARY", "").strip(),
+    "secondary": os.environ.get("RELAX47_REALTYCALENDAR_ICAL_URL_SECONDARY", "").strip(),
+}
+REALTYCALENDAR_SYNC_MINUTES = max(
+    5, min(1440, int(os.environ.get("RELAX47_REALTYCALENDAR_SYNC_MINUTES", "15")))
+)
+REALTYCALENDAR_STATE_PATH = Path("/data/realtycalendar_ical_state.json")
 CONFIG_DIR = Path(os.environ.get("RELAX47_CONFIG_DIR", "/homeassistant"))
 SHARE_DIR = Path(os.environ.get("RELAX47_SHARE_DIR", "/share"))
 AUDIT_PATH = Path(os.environ.get("RELAX47_AUDIT_PATH", "/data/RELAX47_AUDIT.jsonl"))
@@ -198,6 +206,122 @@ def ha_request(
     )
 
 
+def _ical_date(value: str) -> str:
+    """Return an ISO calendar date without retaining private event text."""
+    match = re.match(r"^(\d{4})(\d{2})(\d{2})", value.strip())
+    if not match:
+        raise ValueError("Unsupported iCalendar date")
+    parsed = dt.date(*(int(part) for part in match.groups()))
+    return parsed.isoformat()
+
+
+def parse_ical_availability(payload: bytes) -> list[dict[str, str]]:
+    if len(payload) > 2 * 1024 * 1024:
+        raise ValueError("iCalendar response is too large")
+    text = payload.decode("utf-8-sig", errors="strict").replace("\r\n", "\n").replace("\r", "\n")
+    unfolded: list[str] = []
+    for line in text.split("\n"):
+        if line.startswith((" ", "\t")) and unfolded:
+            unfolded[-1] += line[1:]
+        else:
+            unfolded.append(line)
+    events: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for line in unfolded:
+        if line == "BEGIN:VEVENT":
+            current = {}
+            continue
+        if line == "END:VEVENT":
+            if current is not None and current.get("STATUS", "").upper() != "CANCELLED":
+                if current.get("DTSTART") and current.get("DTEND"):
+                    start = _ical_date(current["DTSTART"])
+                    end = _ical_date(current["DTEND"])
+                    if end > start:
+                        uid = current.get("UID", "")[:256]
+                        events.append({"uid": uid, "start_date": start, "end_date": end})
+            current = None
+            continue
+        if current is None or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.split(";", 1)[0].upper()
+        if key in {"UID", "DTSTART", "DTEND", "STATUS"}:
+            current[key] = value.strip()
+    return events
+
+
+class RealtyCalendarICalSync:
+    def __init__(self) -> None:
+        self.urls = {key: value for key, value in REALTYCALENDAR_ICAL_URLS.items() if value}
+        self.state: dict[str, Any] = json_load(REALTYCALENDAR_STATE_PATH, {})
+        self.state.update({"configured_sources": len(self.urls), "sync_minutes": REALTYCALENDAR_SYNC_MINUTES})
+        self._lock = threading.Lock()
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            return sanitize(dict(self.state))
+
+    def _save(self) -> None:
+        REALTYCALENDAR_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = REALTYCALENDAR_STATE_PATH.with_suffix(".tmp")
+        temporary.write_text(json.dumps(self.state, ensure_ascii=False), encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        temporary.replace(REALTYCALENDAR_STATE_PATH)
+
+    def _fetch(self, url: str) -> bytes:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("iCalendar export URL must be HTTPS and must not contain userinfo")
+        request = urllib.request.Request(url, headers={"Accept": "text/calendar", "User-Agent": "RELAX47/7.14"})
+        with urllib.request.build_opener(NoCredentialRedirect()).open(request, timeout=30) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > 2 * 1024 * 1024:
+                raise ValueError("iCalendar response is too large")
+            payload = response.read(2 * 1024 * 1024 + 1)
+        return payload
+
+    def sync_once(self) -> dict[str, Any]:
+        if not self.urls:
+            return self.status()
+        results: dict[str, Any] = {}
+        errors: list[str] = []
+        for source_id, url in self.urls.items():
+            try:
+                events = parse_ical_availability(self._fetch(url))
+                ha_request(
+                    "/services/relax47_realtycalendar/ingest_ical_snapshot",
+                    method="POST",
+                    data={"source_id": source_id, "fetched_at": now_iso(), "events": events},
+                    timeout=30,
+                )
+                results[source_id] = {"ok": True, "events": len(events)}
+            except Exception as exc:
+                message = safe_error(exc)
+                results[source_id] = {"ok": False, "error": message}
+                errors.append(f"{source_id}: {message}")
+        with self._lock:
+            self.state.update({
+                "configured_sources": len(self.urls),
+                "last_sync_at": now_iso(),
+                "last_sync_ok": not errors,
+                "last_error": "; ".join(errors)[:500] if errors else None,
+                "sources": results,
+                "sync_minutes": REALTYCALENDAR_SYNC_MINUTES,
+            })
+            self._save()
+            return sanitize(dict(self.state))
+
+    def run(self) -> None:
+        if not self.urls:
+            return
+        while True:
+            self.sync_once()
+            time.sleep(REALTYCALENDAR_SYNC_MINUTES * 60)
+
+
+ICAL_SYNC = RealtyCalendarICalSync()
+
+
 async def router_library_call(method: str, *args: Any) -> Any:
     if MiWiFiClient is None:
         raise RuntimeError("Xiaomi MiWiFi client library is unavailable")
@@ -312,6 +436,7 @@ def tool_gateway_status(_: dict[str, Any]) -> dict[str, Any]:
         },
         "inbound_ports_required": PUBLIC_MCP_ENABLED,
         "maintenance": maintenance_manager().status(),
+        "realtycalendar_ical": ICAL_SYNC.status(),
     }
 
 
@@ -1400,6 +1525,6 @@ def serve(port: int) -> None:
 if __name__ == "__main__":
     retention = BackupRetention(maintenance_manager(), lambda: WRITE_MODE)
     threading.Thread(target=retention.run, daemon=True).start()
+    threading.Thread(target=ICAL_SYNC.run, daemon=True).start()
     threading.Thread(target=serve, args=(8099,), daemon=True).start()
     serve(8765)
-

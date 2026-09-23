@@ -2,6 +2,15 @@ configuration:
   ha_user_token:
     name: Home Assistant user access token
     description: Optional long-lived token entered by the owner. Core calls use that user; no automatic role grants. Restart after saving.
+  realtycalendar_ical_url_primary:
+    name: RealtyCalendar export URL 1
+    description: Protected iCalendar Export link for the first duplicate listing. Never shown in gateway status or logs.
+  realtycalendar_ical_url_secondary:
+    name: RealtyCalendar export URL 2
+    description: Protected iCalendar Export link for the second duplicate listing. Both feeds are merged into one RELAX47 property.
+  realtycalendar_sync_minutes:
+    name: RealtyCalendar refresh interval
+    description: How often to download both iCalendar snapshots, in minutes.
   router_host:
     name: Router address
     description: Main Xiaomi AX6000 LAN address.

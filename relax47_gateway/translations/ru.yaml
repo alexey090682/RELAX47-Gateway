@@ -2,3 +2,12 @@ configuration:
   ha_user_token:
     name: Ключ доступа пользователя Home Assistant
     description: Долгосрочный токен из профиля пользователя. Даёт шлюзу права этого пользователя. Пустое поле сохраняет служебное подключение. После изменения перезапустите шлюз.
+  realtycalendar_ical_url_primary:
+    name: Ссылка экспорта RealtyCalendar 1
+    description: Защищённая ссылка «Экспорт» iCalendar для первого объявления. В статусе и журналах не показывается.
+  realtycalendar_ical_url_secondary:
+    name: Ссылка экспорта RealtyCalendar 2
+    description: Защищённая ссылка «Экспорт» iCalendar для второго объявления. Оба календаря объединяются в один объект RELAX47.
+  realtycalendar_sync_minutes:
+    name: Интервал обновления RealtyCalendar
+    description: Период загрузки обоих календарей в минутах.

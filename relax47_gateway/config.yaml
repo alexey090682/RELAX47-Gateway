@@ -1,5 +1,5 @@
 name: "RELAX47 Local Gateway"
-version: "7.14.16"
+version: "7.14.17"
 slug: "relax47_gateway"
 description: "Управляемый шлюз AX6000 и Home Assistant: локальный и публичный HTTPS MCP с OAuth"
 url: "https://github.com/alexey090682/RELAX47-Gateway"
@@ -28,6 +28,9 @@ map:
     read_only: true
 options:
   ha_user_token: ""
+  realtycalendar_ical_url_primary: ""
+  realtycalendar_ical_url_secondary: ""
+  realtycalendar_sync_minutes: 15
   router_host: "192.168.31.1"
   router_model: "RA72"
   router_firmware: "1.0.122"
@@ -60,6 +63,9 @@ options:
   reverse_ssh_private_key: ""
 schema:
   ha_user_token: password
+  realtycalendar_ical_url_primary: password
+  realtycalendar_ical_url_secondary: password
+  realtycalendar_sync_minutes: int(5,1440)
   router_host: str
   router_model: str
   router_firmware: str
@@ -90,4 +96,3 @@ schema:
   reverse_ssh_user: str
   reverse_ssh_remote_port: port
   reverse_ssh_private_key: password
-
