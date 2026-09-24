@@ -24,9 +24,22 @@ class RealtyCalendarICalTests(unittest.TestCase):
             [{
                 "uid": "booking-1",
                 "summary": "Бронь: Иван, прямое бронирование",
+                "description": "",
                 "start_date": "2026-10-10",
                 "end_date": "2026-10-12",
             }],
+        )
+
+    def test_preserves_labeled_guest_description(self) -> None:
+        payload = (
+            "BEGIN:VEVENT\r\nUID:rs-1\r\nDTSTART;VALUE=DATE:20261010\r\n"
+            "DTEND;VALUE=DATE:20261012\r\nSUMMARY:RS12345\r\n"
+            "DESCRIPTION:Источник: RealtyCalendar\\nГость: Семён\\nТелефон: +7...\r\n"
+            "END:VEVENT\r\n"
+        ).encode("utf-8")
+        self.assertEqual(
+            parse_ical_availability(payload)[0]["description"],
+            "Источник: RealtyCalendar\nГость: Семён\nТелефон: +7...",
         )
 
     def test_cancelled_event_is_ignored(self) -> None:
