@@ -223,6 +223,13 @@ def _ical_text(value: str) -> str:
     return " ".join(text.split())[:160]
 
 
+def _ical_description(value: str) -> str:
+    """Decode labeled booking notes while preserving logical line breaks."""
+    text = str(value or "").replace("\\n", "\n").replace("\\N", "\n")
+    text = text.replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\")
+    return "\n".join(" ".join(line.split()) for line in text.splitlines())[:1200]
+
+
 def parse_ical_availability(payload: bytes) -> list[dict[str, str]]:
     if len(payload) > 2 * 1024 * 1024:
         raise ValueError("iCalendar response is too large")
@@ -247,9 +254,11 @@ def parse_ical_availability(payload: bytes) -> list[dict[str, str]]:
                     if end > start:
                         uid = current.get("UID", "")[:256]
                         summary = _ical_text(current.get("SUMMARY", ""))
+                        description = _ical_description(current.get("DESCRIPTION", ""))
                         events.append({
                             "uid": uid,
                             "summary": summary,
+                            "description": description,
                             "start_date": start,
                             "end_date": end,
                         })
@@ -259,7 +268,7 @@ def parse_ical_availability(payload: bytes) -> list[dict[str, str]]:
             continue
         key, value = line.split(":", 1)
         key = key.split(";", 1)[0].upper()
-        if key in {"UID", "DTSTART", "DTEND", "STATUS", "SUMMARY"}:
+        if key in {"UID", "DTSTART", "DTEND", "STATUS", "SUMMARY", "DESCRIPTION"}:
             current[key] = value.strip()
     return events
 
