@@ -215,6 +215,14 @@ def _ical_date(value: str) -> str:
     return parsed.isoformat()
 
 
+def _ical_text(value: str) -> str:
+    """Decode the safe text subset used by iCalendar SUMMARY."""
+    text = str(value or "")
+    text = text.replace("\\n", " ").replace("\\N", " ")
+    text = text.replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\")
+    return " ".join(text.split())[:160]
+
+
 def parse_ical_availability(payload: bytes) -> list[dict[str, str]]:
     if len(payload) > 2 * 1024 * 1024:
         raise ValueError("iCalendar response is too large")
@@ -238,14 +246,20 @@ def parse_ical_availability(payload: bytes) -> list[dict[str, str]]:
                     end = _ical_date(current["DTEND"])
                     if end > start:
                         uid = current.get("UID", "")[:256]
-                        events.append({"uid": uid, "start_date": start, "end_date": end})
+                        summary = _ical_text(current.get("SUMMARY", ""))
+                        events.append({
+                            "uid": uid,
+                            "summary": summary,
+                            "start_date": start,
+                            "end_date": end,
+                        })
             current = None
             continue
         if current is None or ":" not in line:
             continue
         key, value = line.split(":", 1)
         key = key.split(";", 1)[0].upper()
-        if key in {"UID", "DTSTART", "DTEND", "STATUS"}:
+        if key in {"UID", "DTSTART", "DTEND", "STATUS", "SUMMARY"}:
             current[key] = value.strip()
     return events
 
