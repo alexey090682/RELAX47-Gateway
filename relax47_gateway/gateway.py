@@ -34,7 +34,7 @@ from sql_normalization import normalization_plan
 from backup_retention import BackupRetention
 
 
-VERSION = "7.14.17"
+VERSION = "7.14.20"
 ROUTER_HOST = os.environ.get("RELAX47_ROUTER_HOST", "192.168.31.1")
 ROUTER_MODEL = os.environ.get("RELAX47_ROUTER_MODEL", "RA72")
 ROUTER_FIRMWARE = os.environ.get("RELAX47_ROUTER_FIRMWARE", "1.0.122")
