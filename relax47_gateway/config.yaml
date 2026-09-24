@@ -1,5 +1,5 @@
 name: "RELAX47 Local Gateway"
-version: "7.14.19"
+version: "7.14.20"
 slug: "relax47_gateway"
 description: "Управляемый шлюз AX6000 и Home Assistant: локальный и публичный HTTPS MCP с OAuth"
 url: "https://github.com/alexey090682/RELAX47-Gateway"
